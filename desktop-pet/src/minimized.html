@@ -19,6 +19,15 @@
       -webkit-user-select: none;
       font-family: Arial, sans-serif;
     }
+    body.electron-shell,
+    body.electron-shell #wrap,
+    body.electron-shell #pet-box {
+      -webkit-app-region: drag;
+    }
+    body.electron-shell #status-pill,
+    body.electron-shell #pet {
+      -webkit-app-region: no-drag;
+    }
     #wrap {
       width: 100%;
       height: 100%;
@@ -90,12 +99,16 @@
   <script>
     (async function () {
       const isTauri = !!window.__TAURI__;
+      const isElectron = !!window.__ELECTRON__;
       const core = isTauri ? window.__TAURI__.core : null;
       const eventApi = isTauri ? window.__TAURI__.event : null;
       const win = isTauri ? window.__TAURI__.window.getCurrentWindow() : null;
       const status = document.getElementById('status-pill');
       const box = document.getElementById('pet-box');
       const pet = document.getElementById('pet');
+      if (isElectron) {
+        document.body.classList.add('electron-shell');
+      }
 
       const PET_ASSETS = {
         idle: 'http://127.0.0.1:18791/static/star-idle.gif',

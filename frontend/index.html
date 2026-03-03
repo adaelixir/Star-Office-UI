@@ -356,6 +356,22 @@
         body.desktop-shell #desktop-drag-region {
             display: block;
         }
+        body.electron-shell #desktop-drag-region {
+            display: block;
+            pointer-events: auto;
+            -webkit-app-region: drag;
+        }
+        body.electron-shell #game-container,
+        body.electron-shell #bottom-panels,
+        body.electron-shell #window-controls,
+        body.electron-shell #status-fab,
+        body.electron-shell button,
+        body.electron-shell a,
+        body.electron-shell input,
+        body.electron-shell textarea,
+        body.electron-shell select {
+            -webkit-app-region: no-drag;
+        }
         #loading-text {
             color: #ffd700;
             font-size: 18px;
@@ -913,9 +929,13 @@
 
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
     <script>
+        const ELECTRON_MODE = !!window.__ELECTRON__;
         const TAURI_DESKTOP_MODE = !!window.__TAURI__ || new URLSearchParams(window.location.search).get('desktop') === '1';
         if (TAURI_DESKTOP_MODE) {
             document.body.classList.add('desktop-shell');
+        }
+        if (ELECTRON_MODE) {
+            document.body.classList.add('electron-shell');
         }
 
         function initDesktopWindowDrag() {
@@ -1061,21 +1081,41 @@
                     title.textContent = `${title.dataset.baseTitle} ${collapsed ? '[展开]' : '[收起]'}`;
                 };
 
+                const syncElectronWindowMode = async () => {
+                    if (!ELECTRON_MODE || !window.__TAURI__ || !window.__TAURI__.core) return;
+                    const expanded = !!document.querySelector('.panel-collapsible:not(.collapsed)');
+                    try {
+                        await window.__TAURI__.core.invoke('set_main_window_mode', { expanded });
+                    } catch (_) {
+                        // ignore mode sync failures
+                    }
+                };
+
                 title.addEventListener('click', () => {
                     panel.classList.toggle('collapsed');
                     updateTitle();
                     queueDesktopResize();
+                    syncElectronWindowMode();
                     // Recalculate again after collapse/expand transition completes.
                     setTimeout(queueDesktopResize, 260);
+                    setTimeout(syncElectronWindowMode, 260);
                 });
 
                 panel.classList.add('collapsed');
                 updateTitle();
+                syncElectronWindowMode();
             });
         }
         let resizeTimer = null;
         async function syncDesktopWindowSize() {
             if (!TAURI_DESKTOP_MODE || !window.__TAURI__ || !window.__TAURI__.window || !window.__TAURI__.dpi) return;
+            if (ELECTRON_MODE) {
+                const expanded = !!document.querySelector('.panel-collapsible:not(.collapsed)');
+                try {
+                    await window.__TAURI__.core.invoke('set_main_window_mode', { expanded });
+                } catch (_) {}
+                return;
+            }
             const appWindow = window.__TAURI__.window.getCurrentWindow();
             const LogicalSize = window.__TAURI__.dpi.LogicalSize;
             const hasExpandedPanel = !!document.querySelector('.panel-collapsible:not(.collapsed)');
@@ -1095,7 +1135,13 @@
             const contentHeight = Math.ceil(gameRect.height + panelsRect.height + pt + pb + gap + 12);
             const minHeight = hasExpandedPanel ? 500 : 430;
             const maxHeight = hasExpandedPanel ? 980 : 560;
-            const targetHeight = Math.max(minHeight, Math.min(maxHeight, contentHeight));
+            let targetHeight = Math.max(minHeight, Math.min(maxHeight, contentHeight));
+            // Electron fallback: enforce clear collapsed/expanded height delta to avoid "stuck medium height".
+            if (ELECTRON_MODE) {
+                const collapsedH = 430;
+                const expandedH = 620;
+                targetHeight = hasExpandedPanel ? Math.max(expandedH, targetHeight) : collapsedH;
+            }
             try {
                 await appWindow.setSize(new LogicalSize(targetWidth, targetHeight));
             } catch (_) {
