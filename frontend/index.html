@@ -1878,6 +1878,9 @@
         }
 
         function mapAssetPathToSprite(path) {
+            // 背景做特殊映射：即使纹理 key 已变成 office_bg_live_xxx，也能稳定定位到背景对象
+            if ((path || '').includes('office_bg_small.webp') && officeBgSprite) return officeBgSprite;
+
             const item = sceneAssetItems.find(x => x.path === path && x.ref && x.ref.getBounds);
             if (item) return item.ref;
             const cands = pathToTextureCandidates(path);
