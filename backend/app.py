@@ -81,6 +81,11 @@ app.config.update(
 # Guard join-agent critical section to enforce per-key concurrency under parallel requests
 join_lock = threading.Lock()
 
+# Async background task registry for long-running operations (e.g. image generation)
+# Avoids Cloudflare 524 timeout (100s limit) by letting frontend poll for completion.
+_bg_tasks = {}  # task_id -> {"status": "pending"|"done"|"error", "result": ..., "error": ..., "created_at": ...}
+_bg_tasks_lock = threading.Lock()
+
 # Generate a version timestamp once at server startup for cache busting
 VERSION_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 ASSET_DRAWER_PASS_DEFAULT = os.getenv("ASSET_DRAWER_PASS", "1234")
@@ -1297,22 +1302,10 @@ def assets_list():
     return jsonify({"ok": True, "count": len(items), "items": items})
 
 
-@app.route("/assets/generate-rpg-background", methods=["POST"])
-def assets_generate_rpg_background():
-    """Generate a new RPG-themed background and replace office_bg_small.webp."""
-    guard = _require_asset_editor_auth()
-    if guard:
-        return guard
+def _bg_generate_worker(task_id: str, custom_prompt: str, speed_mode: str):
+    """Background worker for RPG background generation."""
     try:
-        req = request.get_json(silent=True) or {}
-        custom_prompt = (req.get("prompt") or "").strip() if isinstance(req, dict) else ""
-        speed_mode = (req.get("speed_mode") or "quality").strip().lower() if isinstance(req, dict) else "quality"
-        if speed_mode not in {"fast", "quality"}:
-            speed_mode = "fast"
-
         target = FRONTEND_PATH / "office_bg_small.webp"
-        if not target.exists():
-            return jsonify({"ok": False, "msg": "office_bg_small.webp 不存在"}), 404
 
         # 覆盖前保留最近一次备份
         bak = target.with_suffix(target.suffix + ".bak")
@@ -1333,31 +1326,108 @@ def assets_generate_rpg_background():
         shutil.copy2(target, hist_file)
 
         st = target.stat()
-        return jsonify({
-            "ok": True,
-            "path": "office_bg_small.webp",
-            "size": st.st_size,
-            "history": os.path.relpath(hist_file, ROOT_DIR),
-            "speed_mode": speed_mode,
-            "msg": "已生成并替换 RPG 房间底图（已自动归档）",
-        })
+        with _bg_tasks_lock:
+            _bg_tasks[task_id] = {
+                "status": "done",
+                "result": {
+                    "ok": True,
+                    "path": "office_bg_small.webp",
+                    "size": st.st_size,
+                    "history": os.path.relpath(hist_file, ROOT_DIR),
+                    "speed_mode": speed_mode,
+                    "msg": "已生成并替换 RPG 房间底图（已自动归档）",
+                },
+            }
     except Exception as e:
         msg = str(e)
+        error_result = {"ok": False, "msg": msg}
         if msg == "MISSING_API_KEY":
-            return jsonify({"ok": False, "code": "MISSING_API_KEY", "msg": "Missing GEMINI_API_KEY or GOOGLE_API_KEY"}), 400
-        if msg == "API_KEY_REVOKED_OR_LEAKED":
-            return jsonify({"ok": False, "code": "API_KEY_REVOKED_OR_LEAKED", "msg": "API key is revoked or flagged as leaked. Please rotate to a new key."}), 400
-        if msg.startswith("MODEL_NOT_AVAILABLE"):
-            detail = ""
+            error_result["code"] = "MISSING_API_KEY"
+            error_result["msg"] = "Missing GEMINI_API_KEY or GOOGLE_API_KEY"
+        elif msg == "API_KEY_REVOKED_OR_LEAKED":
+            error_result["code"] = "API_KEY_REVOKED_OR_LEAKED"
+            error_result["msg"] = "API key is revoked or flagged as leaked. Please rotate to a new key."
+        elif msg.startswith("MODEL_NOT_AVAILABLE"):
+            error_result["code"] = "MODEL_NOT_AVAILABLE"
+            error_result["msg"] = "Configured model is not available for this API key/channel."
             if "::" in msg:
-                detail = msg.split("::", 1)[1]
-            return jsonify({
-                "ok": False,
-                "code": "MODEL_NOT_AVAILABLE",
-                "msg": "Configured model is not available for this API key/channel.",
-                "detail": detail,
-            }), 400
-        return jsonify({"ok": False, "msg": msg}), 500
+                error_result["detail"] = msg.split("::", 1)[1]
+        with _bg_tasks_lock:
+            _bg_tasks[task_id] = {"status": "error", "result": error_result}
+
+
+@app.route("/assets/generate-rpg-background", methods=["POST"])
+def assets_generate_rpg_background():
+    """Start async RPG background generation. Returns a task_id for polling."""
+    guard = _require_asset_editor_auth()
+    if guard:
+        return guard
+    try:
+        req = request.get_json(silent=True) or {}
+        custom_prompt = (req.get("prompt") or "").strip() if isinstance(req, dict) else ""
+        speed_mode = (req.get("speed_mode") or "quality").strip().lower() if isinstance(req, dict) else "quality"
+        if speed_mode not in {"fast", "quality"}:
+            speed_mode = "fast"
+
+        target = FRONTEND_PATH / "office_bg_small.webp"
+        if not target.exists():
+            return jsonify({"ok": False, "msg": "office_bg_small.webp 不存在"}), 404
+
+        # Pre-flight checks that can fail fast (before spawning thread)
+        runtime_cfg = load_runtime_config()
+        api_key = (runtime_cfg.get("gemini_api_key") or "").strip()
+        if not api_key:
+            return jsonify({"ok": False, "code": "MISSING_API_KEY", "msg": "Missing GEMINI_API_KEY or GOOGLE_API_KEY"}), 400
+        if not (os.path.exists(GEMINI_PYTHON) and os.path.exists(GEMINI_SCRIPT)):
+            return jsonify({"ok": False, "msg": "生图脚本环境缺失：gemini-image-generate 未安装"}), 500
+
+        # Check if another generation is already running
+        with _bg_tasks_lock:
+            for tid, task in _bg_tasks.items():
+                if task.get("status") == "pending":
+                    return jsonify({"ok": True, "async": True, "task_id": tid, "msg": "已有生图任务进行中，请等待完成"}), 200
+
+        # Create async task
+        import string as _string
+        task_id = "gen_" + str(int(datetime.now().timestamp() * 1000)) + "_" + "".join(random.choices(_string.ascii_lowercase + _string.digits, k=4))
+        with _bg_tasks_lock:
+            _bg_tasks[task_id] = {"status": "pending", "created_at": datetime.now().isoformat()}
+
+        t = threading.Thread(target=_bg_generate_worker, args=(task_id, custom_prompt, speed_mode), daemon=True)
+        t.start()
+
+        return jsonify({"ok": True, "async": True, "task_id": task_id, "msg": "生图任务已启动，请通过 task_id 轮询结果"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/assets/generate-rpg-background/poll", methods=["GET"])
+def assets_generate_rpg_background_poll():
+    """Poll async generation task status."""
+    guard = _require_asset_editor_auth()
+    if guard:
+        return guard
+    task_id = (request.args.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"ok": False, "msg": "缺少 task_id"}), 400
+    with _bg_tasks_lock:
+        task = _bg_tasks.get(task_id)
+    if not task:
+        return jsonify({"ok": False, "msg": "任务不存在"}), 404
+    status = task.get("status", "pending")
+    if status == "pending":
+        return jsonify({"ok": True, "status": "pending", "msg": "生图进行中..."})
+    elif status == "done":
+        # Clean up task after delivering result
+        with _bg_tasks_lock:
+            _bg_tasks.pop(task_id, None)
+        return jsonify({"ok": True, "status": "done", **task.get("result", {})})
+    else:
+        with _bg_tasks_lock:
+            _bg_tasks.pop(task_id, None)
+        result = task.get("result", {})
+        code = 400 if result.get("code") else 500
+        return jsonify({"ok": False, "status": "error", **result}), code
 
 
 @app.route("/assets/restore-reference-background", methods=["POST"])
