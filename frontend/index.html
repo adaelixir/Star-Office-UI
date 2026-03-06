@@ -3300,6 +3300,7 @@ function toggleBrokerPanel() {
                 bindAssetDrawerBackgroundDeselect();
                 await ensureGeminiConfigLoaded();
                 if (assetDrawerAuthed) {
+                    await applySavedPositionOverrides();
                     await refreshAssetDrawerList();
                     await renderHomeFavorites(false);
                     bindDrawerFileMeta();
@@ -3925,7 +3926,15 @@ function toggleBrokerPanel() {
                     console.warn('flowers 规格探测失败，使用默认 65x65', e);
                 }
 
-                applySavedPositionOverrides();
+                // Only fetch /assets/positions and /assets/defaults when user is authed,
+                // to avoid 401 Unauthorized on first load for new visitors (issue #54).
+                try {
+                    const authRes = await fetch('/assets/auth/status', { cache: 'no-store' });
+                    const authData = await authRes.json();
+                    if (authData && authData.ok && authData.authed) {
+                        await applySavedPositionOverrides();
+                    }
+                } catch (e) {}
             }, 600);
         }
 

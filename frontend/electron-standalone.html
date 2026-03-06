@@ -4182,6 +4182,7 @@ function toggleBrokerPanel() {
                 bindAssetDrawerBackgroundDeselect();
                 await ensureGeminiConfigLoaded();
                 if (assetDrawerAuthed) {
+                    await applySavedPositionOverrides();
                     await refreshAssetDrawerList();
                     await renderHomeFavorites(false);
                     bindDrawerFileMeta();
@@ -4212,6 +4213,7 @@ function toggleBrokerPanel() {
                 bindAssetDrawerBackgroundDeselect();
                 await ensureGeminiConfigLoaded();
                 if (assetDrawerAuthed) {
+                    await applySavedPositionOverrides();
                     await refreshAssetDrawerList();
                     await renderHomeFavorites(false);
                     bindDrawerFileMeta();
@@ -4835,7 +4837,15 @@ function toggleBrokerPanel() {
             
             // 启动 Phaser 游戏
             new Phaser.Game(config);
-            setTimeout(() => { applySavedPositionOverrides(); }, 600);
+            setTimeout(async () => {
+                try {
+                    const authRes = await fetch('/assets/auth/status', { cache: 'no-store' });
+                    const authData = await authRes.json();
+                    if (authData && authData.ok && authData.authed) {
+                        await applySavedPositionOverrides();
+                    }
+                } catch (e) {}
+            }, 600);
         }
 
         function preload() {
