@@ -47,7 +47,7 @@ cd backend
 python3 app.py
 ```
 
-打开 **http://127.0.0.1:19000**，然后试试切状态：
+打开 **http://127.0.0.1:19000** 然后试试切状态：
 
 ```bash
 python3 set_state.py writing "正在整理文档"
