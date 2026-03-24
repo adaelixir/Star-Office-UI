@@ -1231,6 +1231,35 @@ def agent_push():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/install-skill.sh", methods=["GET"])
+def install_skill_sh():
+    """Serve the join-office skill installer script for Klaw users."""
+    script_path = os.path.join(ROOT_DIR, "scripts", "install-skill.sh")
+    if not os.path.isfile(script_path):
+        return "# install-skill.sh not found on server\n", 404, {"Content-Type": "text/plain; charset=utf-8"}
+    with open(script_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return content, 200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": "inline; filename=install-skill.sh",
+        "Cache-Control": "no-cache",
+    }
+
+
+@app.route("/skill.md", methods=["GET"])
+def get_skill_md():
+    """Serve the join-office SKILL.md directly, so Klaw can install it via conversation."""
+    skill_path = os.path.join(ROOT_DIR, "skills", "join-office", "SKILL.md")
+    if not os.path.isfile(skill_path):
+        return "# SKILL.md not found\n", 404, {"Content-Type": "text/plain; charset=utf-8"}
+    with open(skill_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return content, 200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache",
+    }
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check"""

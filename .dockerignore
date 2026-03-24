@@ -1,0 +1,10 @@
+.git
+.env
+__pycache__
+*.pyc
+.venv
+node_modules
+desktop-pet/src-tauri/target
+electron-shell/node_modules
+docs/
+*.md

@@ -947,12 +947,18 @@ function getAreaPosition(area, slotIndex) {
   return positions[idx];
 }
 
+function truncateDetail(detail, maxLen) {
+  if (!detail) return '';
+  return detail.length > maxLen ? detail.slice(0, maxLen) + '…' : detail;
+}
+
 function renderAgent(agent) {
   const agentId = agent.agentId;
   const name = agent.name || 'Agent';
   const area = agent.area || 'breakroom';
   const authStatus = agent.authStatus || 'pending';
   const isMain = !!agent.isMain;
+  const detail = agent.detail || '';
 
   // 获取这个 agent 在区域里的位置
   const pos = getAreaPosition(area, agent._slotIndex || 0);
@@ -1003,6 +1009,23 @@ function renderAgent(agent) {
     statusDot.name = 'statusDot';
 
     container.add([starIcon, statusDot, nameTag]);
+
+    // detail 气泡（显示当前正在做什么），只在有内容时显示
+    const detailStr = truncateDetail(detail, 44);
+    const detailTag = game.add.text(0, 28, detailStr, {
+      fontFamily: 'ArkPixel, monospace',
+      fontSize: '11px',
+      fill: '#f0f0f0',
+      stroke: '#222',
+      strokeThickness: 3,
+      backgroundColor: detailStr ? 'rgba(30,30,50,0.82)' : null,
+      padding: { x: 6, y: 3 },
+      wordWrap: { width: 220, useAdvancedWrap: true }
+    }).setOrigin(0.5);
+    detailTag.name = 'detailTag';
+    detailTag.setVisible(!!detailStr);
+    container.add(detailTag);
+
     agents[agentId] = container;
   } else {
     // 更新 agent
@@ -1026,6 +1049,14 @@ function renderAgent(agent) {
       if (authStatus === 'rejected') dotColor = 0xef4444;
       if (authStatus === 'offline') dotColor = 0x94a3b8;
       statusDot.fillColor = dotColor;
+    }
+    // 更新 detail 气泡
+    const detailTag = container.getAt(3);
+    if (detailTag && detailTag.name === 'detailTag') {
+      const newDetail = truncateDetail(detail, 44);
+      detailTag.setText(newDetail);
+      detailTag.setVisible(!!newDetail);
+      detailTag.setStyle({ backgroundColor: newDetail ? 'rgba(30,30,50,0.82)' : null });
     }
   }
 }

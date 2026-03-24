@@ -1,0 +1,18 @@
+services:
+  star-office:
+    build: .
+    ports:
+      - "19000:19000"
+    volumes:
+      # Persist state and config across restarts
+      - ./state.json:/app/state.json
+      - ./agents-state.json:/app/agents-state.json
+      - ./join-keys.json:/app/join-keys.json
+      - ./asset-positions.json:/app/asset-positions.json
+      - ./asset-defaults.json:/app/asset-defaults.json
+      - ./assets:/app/assets
+    environment:
+      - STAR_OFFICE_ENV=production
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me-to-a-random-string-at-least-24-chars}
+      - ASSET_DRAWER_PASS=${ASSET_DRAWER_PASS:-office2026}
+    restart: unless-stopped
